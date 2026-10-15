@@ -2,7 +2,7 @@
 
 ## Workflow (start → end)
 
-![Workflow diagram](docs/workflow.png)
+![Workflow diagram](round2/docs/workflow.png)
 
 <details>
 <summary>Text version (for diff / screen readers)</summary>
@@ -75,10 +75,12 @@ Verified live: KAN-6/KAN-7 created and read back by label.
 
 ## Layout
 
-- `src/main.py` — CLI entry · `src/orchestrator.py` — mission controller
-- `src/schemas.py` — incident contract · `src/classifier.py` — R1 adapter
-- `src/crew/` — triage, engineer, logistics, communications, safety, registry
-- `src/memory/` — FAISS/TFIDF historian · `src/tools/` — audit, dossier, recurrence, deception
-- `src/ack.py`, `src/forensics.py`, `src/tickets.py` — ack escalation, black box, Jira
-- `config/crew.json` — 12-member registry · `crew.json` removed (single source of truth)
-- `tests/` — 50 green · `demo_logs.csv`, `demo.ps1` — 5-log demo (D1 books+mails, D4 deduped)
+- `round2/src/main.py` — CLI entry · `round2/src/orchestrator.py` — mission controller
+- `round2/src/schemas.py` — incident contract · `round2/src/classifier.py` — R1 adapter
+- `round2/src/crew/` — triage, engineer, logistics, communications, safety, registry
+- `round2/src/memory/` — FAISS/TFIDF historian · `round2/src/tools/` — audit, dossier, recurrence, deception
+- `round2/src/ack.py`, `round2/src/forensics.py`, `round2/src/tickets.py` — ack escalation, black box, Jira
+- `round2/config/crew.json` — 12-member registry · `crew.json` removed (single source of truth)
+- `round2/tests/` — 50 green · `round2/demo_logs.csv`, `round2/demo.ps1` — 5-log demo (D1 books+mails, D4 deduped)
+- `round2/docs/workflow.png` — workflow diagram (shown above)
+- `rogue-protocol/` — Round 1 kit (starter notebook, train/val/test, checker)
