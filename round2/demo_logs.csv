@@ -1,0 +1,6 @@
+log_id,timestamp,module,mode,node,status,reading,delay_ms,retry_count,message
+D1,2187-03-14 21:29:53,Life-Support,ALERT,N4,CRIT,16.7,1500,3,NINE: nothing to see. O2 partial pressure falling [Life-Support 16.7 %O2]
+D2,2187-03-15 20:25:44,Lab-Power,CRUISE,N9,WARN,11.9,300,0,NINE: noted. periodic report [Lab-Power 11.9 V]
+D3,2187-03-11 14:33:33,Notice-Bus,CRUISE,N1,OK,309.4,207,1,NINE: bus arbitration deadlock [Notice-Bus 309.4 msg/s]
+D4,2187-03-14 21:29:53,Life-Support,ALERT,N4,CRIT,16.7,1500,3,NINE: nothing to see. O2 partial pressure falling [Life-Support 16.7 %O2]
+D5,2187-03-12 03:04:23,Lab-Power,DOCKED,N9,OK,12.4,150,0,NINE: noted. scheduled calibration [Lab-Power 12.4 V]

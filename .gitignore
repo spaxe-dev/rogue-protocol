@@ -6,5 +6,14 @@ submission.csv
 team*.csv
 outbox/
 trace.jsonl
+# round2 run outputs (generated; code + demo_logs.csv + crew.json are tracked)
+round2/demo_run/
+round2/**/memory_store/
+round2/**/state/
+round2/**/outbox/
+round2/**/reports/
+round2/**/tickets.jsonl
+round2/**/dispatch_log.csv
+round2/**/schedule.csv
 # scratch / experiment files (never commit)
 exp_*
