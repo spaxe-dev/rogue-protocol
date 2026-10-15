@@ -175,6 +175,32 @@ class JiraProvider(TicketProvider):
                 "detail": "Jira issue %s created in project %s (priority %s)"
                           % (key, self.project_key, priority)}
 
+    def search_by_label(self, label):
+        """Find issues carrying our incident label. Used to reconcile timeouts."""
+        import urllib.parse
+        jql = "labels = %s" % label
+        url = "%s/rest/api/3/search?%s" % (
+            self.base_url, urllib.parse.urlencode(
+                {"jql": jql, "fields": "key,summary", "maxResults": 5}))
+        req = urllib.request.Request(
+            url, method="GET",
+            headers={"Accept": "application/json",
+                     "Authorization": self._auth})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as e:
+            raise JiraError("Jira search HTTP %s" % e.code,
+                            retryable=e.code == 429 or 500 <= e.code < 600)
+        except urllib.error.URLError as e:
+            raise JiraError("Jira network error: %s" % e, retryable=True)
+        out = []
+        for issue in body.get("issues", []) or []:
+            out.append({"key": issue.get("key"),
+                        "url": "%s/browse/%s" % (self.base_url, issue.get("key")),
+                        "summary": ((issue.get("fields") or {}).get("summary", ""))})
+        return out
+
     def attach_file(self, issue_key, path):
         """Try multipart attach; False on any failure (caller inlines)."""
         try:
@@ -486,8 +512,25 @@ def build_ticket_request(incident, escalation_type, reason="", state_dir=None):
                 incident, escalation_type, reason, state_dir)}
 
 
+def _load_dotenv():
+    """Load round2/.env (KEY=VALUE lines, stdlib only) without overriding real env."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for cand in (os.path.join(here, "..", ".env"),
+                 os.path.join(os.getcwd(), ".env")):
+        try:
+            with open(os.path.normpath(cand), encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        os.environ.setdefault(k.strip(), v.strip())
+        except OSError:
+            continue
+
+
 def provider_from_env():
     """Return (provider|None, reason). Enabled only when JIRA_ENABLED=1."""
+    _load_dotenv()
     if os.environ.get("JIRA_ENABLED") != "1":
         return None, "dry-run (JIRA_ENABLED != 1)"
     base = os.environ.get("JIRA_BASE_URL", "").strip()
@@ -559,6 +602,66 @@ def create_ticket(request, state_dir, provider=None):
     mapping[idem] = result
     _save_map(state_dir, mapping)
     return result
+
+
+def reconcile(state_dir, request, provider):
+    """After a possible-timeout: adopt an already-created issue instead of
+    duplicating. Returns a ticket-result or None (nothing found -> retry)."""
+    request = dict(request or {})
+    label = str(request.get("incident_id") or request.get("log_id", "unknown"))
+    try:
+        hits = provider.search_by_label(label)
+    except JiraError:
+        return None
+    if not hits:
+        return None
+    hit = hits[0]
+    result = {"provider": getattr(provider, "provider", PROVIDER_NAME),
+              "key": hit["key"], "url": hit["url"], "status": "created",
+              "detail": "reconciled: %s already exists, adopted (no duplicate)"
+                        % hit["key"]}
+    mapping = _load_map(state_dir)
+    idem = "%s:%s" % (label, request.get("escalation_type", "unknown"))
+    mapping[idem] = result
+    _save_map(state_dir, mapping)
+    return result
+
+
+def retry_pending(state_dir, provider=None):
+    """Retry queued/pending events: reconcile-first, then recreate. Returns list."""
+    if provider is None:
+        provider, _ = provider_from_env()
+        if provider is None:
+            return []
+    outcomes = []
+    pend_path = _state_path(state_dir, PENDING_FILE)
+    try:
+        pending = [json.loads(l) for l in open(pend_path, encoding="utf-8")
+                   if l.strip()]
+    except (OSError, ValueError):
+        pending = []
+    remaining = []
+    for ev in pending:
+        req = ev.get("request", {})
+        if not ev.get("retryable", False):
+            remaining.append(ev)
+            outcomes.append({"idempotency_key": ev.get("idempotency_key"),
+                             "status": "failed",
+                             "detail": "not retryable, left pending"})
+            continue
+        adopted = reconcile(state_dir, req, provider)
+        if adopted:
+            outcomes.append(adopted)
+            continue
+        try:
+            outcomes.append(create_ticket(req, state_dir, provider))
+        except Exception as e:  # defensive
+            remaining.append(ev)
+            outcomes.append({"status": "failed", "detail": str(e)[:200]})
+    with open(pend_path, "w", encoding="utf-8") as f:
+        for ev in remaining:
+            f.write(json.dumps(ev) + "\n")
+    return outcomes
 
 
 def ticket_escalation(state_dir, incident, escalation, provider=None):

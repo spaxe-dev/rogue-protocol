@@ -146,10 +146,20 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
             inc.trace.append("NOVA->PULSE suppressed: %s" % inc.status)
             registry.log_activity(state_dir, "PULSE", "suppress", {"status": inc.status})
         else:
-            inc.notification = NotificationStatus(**communications.send(
-                state_dir, lid, crew_id, crew_name, inc.predicted_module,
-                proba, priority, findings, neighbors))
-            inc.trace.append("NOVA->PULSE dispatched %s" % inc.notification.status)
+            try:
+                sent = communications.send(
+                    state_dir, lid, crew_id, crew_name, inc.predicted_module,
+                    proba, priority, findings, neighbors)
+            except Exception as exc:
+                sent = {"channel": "local-outbox", "status": "failed",
+                        "path": "", "reason": "%s: %s" % (type(exc).__name__, exc)}
+            inc.notification = NotificationStatus(**{
+                k: v for k, v in sent.items() if k in
+                ("channel", "status", "path")})
+            if sent.get("status") == "failed":
+                inc.trace.append("NOVA->PULSE failed: %s" % sent.get("reason", "?"))
+            else:
+                inc.trace.append("NOVA->PULSE dispatched %s" % inc.notification.status)
             registry.log_activity(state_dir, "PULSE", "send",
                                   {"path": inc.notification.path})
         # NOVA -> AEGIS -> ORBIT: gate then book
@@ -205,20 +215,29 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
                                "sched": inc.schedule.state, "mail": inc.notification.status})
         inc.trace.append("memory=%s specialist=%s (%s)" % (mem_name, crew_id, why))
         seen[lid] = "processed"
-        log_trace(state_dir, {"log_id": lid, "incident": inc.model_dump(),
-                              "ts": datetime.now(timezone.utc).isoformat()})
         # forensics archive + report (never breaks the pipeline)
         try:
             from forensics import record_incident, make_escalation_event
             from tickets import ticket_escalation
-            record_incident(state_dir, inc.model_dump(), threshold=classifier.THR)
-            if any("disagree" in t for t in inc.trace):
+            snap = inc.model_dump()
+            disagrees = (any("disagree" in t for t in inc.trace)
+                         or any("disagree" in r for r in
+                                (inc.risk.rationale if hasattr(inc.risk, "rationale") else [])))
+            if disagrees:
                 esc = make_escalation_event(lid, "disagreement",
                                             "laya-vs-deterministic priority disagreement")
-                ticket_escalation(state_dir, inc.model_dump(), esc)
-                inc.trace.append("ticket queued for disagreement escalation")
+                ticket = ticket_escalation(state_dir, snap, esc)
+                snap["ticket"] = ticket
+                inc.trace.append("ticket %s: %s" % (ticket.get("status"),
+                                                    ticket.get("key") or ticket.get("detail", "")))
+                registry.log_activity(state_dir, "NOVA", "ticket",
+                                      {"status": ticket.get("status"),
+                                       "key": ticket.get("key")})
+            record_incident(state_dir, snap, threshold=classifier.THR)
         except Exception as exc:
             inc.trace.append("forensics/ticket hook skipped: %s" % type(exc).__name__)
+        log_trace(state_dir, {"log_id": lid, "incident": inc.model_dump(),
+                              "ts": datetime.now(timezone.utc).isoformat()})
         results.append(inc.model_dump())
     json.dump(seen, open(seen_path, "w"))
     # post-incident report (F)

@@ -1,6 +1,7 @@
 __pycache__/
 .ipynb_checkpoints/
 .venv/
+.env
 *.joblib
 submission.csv
 team*.csv
