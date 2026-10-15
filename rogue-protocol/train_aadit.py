@@ -2,82 +2,31 @@
     python train_aadit.py
 Writes: model.joblib, threshold.txt, metrics.md
 
-NOTE: Kunal's features_kunal.py doesn't exist yet, so the preprocessor
-lives inline here (same spec as roles/kunal-features.md). When Kunal lands
-make_preprocessor(), replace _build_pre() bodies with his import — keep the
-model + threshold logic untouched.
+Preprocessing comes from Kunal's features_kunal.make_preprocessor
+(verified byte-identical flags + exact score reproduction 0.6832 @0.54).
+Model + threshold logic below is Aadit's and stays untouched.
 """
 import time
 import joblib
-import numpy as np
 import pandas as pd
-from sklearn.compose import ColumnTransformer
-from sklearn.decomposition import TruncatedSVD
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix, f1_score
-from sklearn.pipeline import Pipeline, make_pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.pipeline import make_pipeline
+
+from features_kunal import make_preprocessor
 
 SEED = 42
-NUM = ["reading", "delay_ms", "retry_count"]
-CAT = ["module", "mode", "node", "status"]
-# Verified signals (val-tuned sweep + Kunal EDA cross-check):
-# - has_red UNSTABLE (train 0.56/val 0.35) — kept as feature, never rule
-# - phrase flags: NEG (drill/duplicate/recovered/calib/self-test) large-n + train/val agree;
-#   POS (seal/heartbeat/queue) small-n but stable direction. Neutral on val, principled keep.
-POS_PHRASES = ["seal breach", "heartbeat missing", "queue overflow"]
-NEG_PHRASES = ["drill", "duplicate of earlier", "recovered after retry",
-               "scheduled calibration", "self-test pattern"]
-KW = (["has_red", "calm", "mlen", "reading_missing"]
-      + ["pos%d" % i for i in range(len(POS_PHRASES))]
-      + ["neg%d" % i for i in range(len(NEG_PHRASES))])
-
-
-def add_keyword_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["has_red"] = df["message"].str.contains("REDACTED", regex=False).astype(int)
-    df["calm"] = df["message"].str.contains(
-        "all is well|nothing to see|crew need not worry", case=False
-    ).astype(int)
-    df["mlen"] = df["message"].str.len()
-    df["reading_missing"] = df["reading"].isna().astype(int)
-    for i, p in enumerate(POS_PHRASES):
-        df["pos%d" % i] = df["message"].str.contains(p, case=False, regex=False).astype(int)
-    for i, p in enumerate(NEG_PHRASES):
-        df["neg%d" % i] = df["message"].str.contains(p, case=False, regex=False).astype(int)
-    return df
 
 
 def build_sparse_pre():
-    """Sparse path: LogReg / LGBM consume TF-IDF directly."""
-    return ColumnTransformer(
-        [
-            ("num", make_pipeline(SimpleImputer(strategy="median"), StandardScaler()),
-             NUM + KW),
-            ("cat", OneHotEncoder(handle_unknown="ignore"), CAT),
-            ("txt", TfidfVectorizer(max_features=8000, ngram_range=(1, 2),
-                                    sublinear_tf=True, min_df=2), "message"),
-        ]
-    )
+    """Sparse path: LogReg / LGBM consume TF-IDF directly (Kunal)."""
+    return make_preprocessor(dense=False)
 
 
 def build_dense_pre():
-    """Dense path: HGB needs dense input, so TF-IDF goes via SVD-128."""
-    return ColumnTransformer(
-        [
-            ("num", make_pipeline(SimpleImputer(strategy="median"), StandardScaler()),
-             NUM + KW),
-            ("cat", OneHotEncoder(handle_unknown="ignore"), CAT),
-            ("txt", Pipeline([
-                ("tf", TfidfVectorizer(max_features=8000, ngram_range=(1, 2),
-                                       sublinear_tf=True, min_df=2)),
-                ("svd", TruncatedSVD(n_components=64, random_state=SEED)),
-            ]), "message"),
-        ]
-    )
+    """Dense path: HGB needs dense input, TF-IDF via SVD-64 (Kunal)."""
+    return make_preprocessor(dense=True)
 
 
 def sweep_threshold(proba, y):
@@ -91,8 +40,8 @@ def sweep_threshold(proba, y):
 
 def main():
     t0 = time.time()
-    tr = add_keyword_features(pd.read_csv("train.csv"))
-    va = add_keyword_features(pd.read_csv("val.csv"))
+    tr = pd.read_csv("train.csv")
+    va = pd.read_csv("val.csv")
     ytr, yva = tr["is_true_fault"], va["is_true_fault"]
 
     # Floor: LogReg sparse
