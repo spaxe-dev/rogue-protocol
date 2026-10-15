@@ -24,7 +24,16 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 SEED = 42
 NUM = ["reading", "delay_ms", "retry_count"]
 CAT = ["module", "mode", "node", "status"]
-KW = ["has_red", "calm", "mlen"]
+# Verified signals (val-tuned sweep + Kunal EDA cross-check):
+# - has_red UNSTABLE (train 0.56/val 0.35) — kept as feature, never rule
+# - phrase flags: NEG (drill/duplicate/recovered/calib/self-test) large-n + train/val agree;
+#   POS (seal/heartbeat/queue) small-n but stable direction. Neutral on val, principled keep.
+POS_PHRASES = ["seal breach", "heartbeat missing", "queue overflow"]
+NEG_PHRASES = ["drill", "duplicate of earlier", "recovered after retry",
+               "scheduled calibration", "self-test pattern"]
+KW = (["has_red", "calm", "mlen", "reading_missing"]
+      + ["pos%d" % i for i in range(len(POS_PHRASES))]
+      + ["neg%d" % i for i in range(len(NEG_PHRASES))])
 
 
 def add_keyword_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -34,6 +43,11 @@ def add_keyword_features(df: pd.DataFrame) -> pd.DataFrame:
         "all is well|nothing to see|crew need not worry", case=False
     ).astype(int)
     df["mlen"] = df["message"].str.len()
+    df["reading_missing"] = df["reading"].isna().astype(int)
+    for i, p in enumerate(POS_PHRASES):
+        df["pos%d" % i] = df["message"].str.contains(p, case=False, regex=False).astype(int)
+    for i, p in enumerate(NEG_PHRASES):
+        df["neg%d" % i] = df["message"].str.contains(p, case=False, regex=False).astype(int)
     return df
 
 
@@ -60,7 +74,7 @@ def build_dense_pre():
             ("txt", Pipeline([
                 ("tf", TfidfVectorizer(max_features=8000, ngram_range=(1, 2),
                                        sublinear_tf=True, min_df=2)),
-                ("svd", TruncatedSVD(n_components=128, random_state=SEED)),
+                ("svd", TruncatedSVD(n_components=64, random_state=SEED)),
             ]), "message"),
         ]
     )
@@ -91,11 +105,12 @@ def main():
     p_floor = floor.predict_proba(va)[:, 1]
     thr_floor, f1_floor = sweep_threshold(p_floor, yva)
 
-    # Primary: HGB dense
+    # Primary: HGB dense (promoted config: svd64 + phrase flags + leaves15;
+    # sweep winner 0.6832 @0.54, +0.031 over svd128 baseline; CV caveat in metrics.md)
     primary = make_pipeline(
         build_dense_pre(),
         HistGradientBoostingClassifier(
-            max_iter=300, learning_rate=0.06, max_leaf_nodes=31,
+            max_iter=300, learning_rate=0.06, max_leaf_nodes=15,
             min_samples_leaf=30, class_weight="balanced", random_state=SEED),
     )
     primary.fit(tr, ytr)
@@ -125,7 +140,7 @@ def main():
     if f1_floor >= f1_hgb - 0.01:
         winner, winner_name, p_win, thr_win, f1_win = floor, "logreg-tfidf", p_floor, thr_floor, f1_floor
     else:
-        winner, winner_name, p_win, thr_win, f1_win = primary, "hgb-svd128", p_hgb, thr_hgb, f1_hgb
+        winner, winner_name, p_win, thr_win, f1_win = primary, "hgb-svd64-leaves15+flags", p_hgb, thr_hgb, f1_hgb
 
     joblib.dump(winner, "model.joblib")
     with open("threshold.txt", "w") as f:
