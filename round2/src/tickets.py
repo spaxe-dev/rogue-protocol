@@ -208,7 +208,7 @@ class JiraProvider(TicketProvider):
         try:
             with open(path, "rb") as f:
                 blob = f.read()
-            boundary = "----rogueprotocol边界x7"
+            boundary = "----rogueprotocolx7boundary"
             name = os.path.basename(path)
             head = ("--%s\r\nContent-Disposition: form-data; name=\"file\"; "
                     "filename=\"%s\"\r\nContent-Type: application/octet-stream"
