@@ -5,6 +5,7 @@ failures degrade (review queue / outbox / pending ticket) without repeating
 already-successful side effects. Idempotent re-runs via state/seen.json.
 """
 import csv
+import hashlib
 import json
 import os
 import sys
@@ -16,6 +17,7 @@ import classifier  # noqa: E402
 from crew import triage, engineer, logistics, communications, registry, safety  # noqa: E402
 from memory.historian import open_memory  # noqa: E402
 from tools import deception_detector  # noqa: E402
+from tools.recurrence import analyze_recurrence, render_report  # noqa: E402
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +27,14 @@ ROUND2_ROOT = os.path.normpath(os.path.join(HERE, ".."))
 def log_trace(state_dir, entry):
     with open(os.path.join(state_dir, "trace.jsonl"), "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def row_fingerprint(row):
+    """Stable exact-source fingerprint; excludes only the assigned log ID."""
+    payload = {str(k): str(v) for k, v in row.items() if k != "log_id"}
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                         separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
@@ -40,8 +50,17 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
     sched_path = os.path.join(state_dir, "schedule.csv")
     seen_path = os.path.join(state_dir, "state", "seen.json")
     seen = json.load(open(seen_path)) if os.path.exists(seen_path) else {}
-    mem, mem_name = open_memory(os.path.join(state_dir, "memory_store"), memory_backend)
-    print("memory backend: %s (persisted=%s)" % (mem_name, mem.persisted()))
+    memory_path = os.path.join(state_dir, "memory_store")
+    memory_errors = []
+    try:
+        mem, mem_name = open_memory(memory_path, memory_backend)
+        mem_status = mem.report()
+    except Exception as exc:
+        mem, mem_name = None, "unavailable"
+        mem_status = {"backend": mem_name, "record_count": 0, "persisted": False,
+                      "error": "%s: %s" % (type(exc).__name__, exc)}
+        memory_errors.append(mem_status["error"])
+    print("memory: %s" % json.dumps(mem_status, sort_keys=True))
 
     import pandas as pd
     logs = pd.read_csv(input_csv)
@@ -72,14 +91,26 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
         inc.trace.append("NOVA->LYRA assessed %s" % risk["urgency"])
         inc.deception_flags = deception_detector.detect(row, proba, seen_hashes)
         # NOVA -> ECHO: history (D) before routing so neighbors inform specialist choice
-        neighbors = mem.query(str(row.get("message", "")), k=3,
-                              module=inc.predicted_module)
+        neighbors = []
+        fingerprint = row_fingerprint(row)
+        exact_prior = None
+        if mem is not None:
+            try:
+                neighbors = mem.query(str(row.get("message", "")), k=3,
+                                      module=inc.predicted_module)
+                exact_prior = mem.find_exact(fingerprint, module=inc.predicted_module)
+            except Exception as exc:
+                detail = "query %s: %s" % (type(exc).__name__, exc)
+                memory_errors.append(detail)
+                inc.trace.append("NOVA->ECHO degraded: " + detail)
         registry.log_activity(state_dir, "ECHO", "query", {"hits": len(neighbors)})
         inc.neighbors = neighbors
         inc.trace.append("NOVA->ECHO %d neighbors" % len(neighbors))
-        dup = next((n for n in neighbors if n["score"] > 0.97), None)
+        # Similarity alone never suppresses work. Only a byte-stable source-row
+        # fingerprint match against persisted metadata qualifies as a duplicate.
+        dup = {"log_id": exact_prior} if exact_prior else None
         if dup:
-            inc.is_duplicate_of = dup["log_id"]
+            inc.is_duplicate_of = exact_prior
         # NOVA -> ATLAS: specialist + diagnosis + ticket (C)
         crew_id, why = registry.dispatch(by_id, "ATLAS", engineer.resolve_specialist,
                                          row=row, roster=roster, neighbors=neighbors)
@@ -155,10 +186,20 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
                 inc.trace.append("NOVA->ORBIT booked %s" % reason)
                 registry.log_activity(state_dir, "ORBIT", "book", {"reason": reason}, ok=ok)
         # historian: persist AFTER actions so memory holds outcomes
-        mem.add(lid, str(row.get("message", "")),
-                {"module": inc.predicted_module, "verdict": verdict,
-                 "crew": crew_id, "priority": priority})
-        registry.log_activity(state_dir, "ECHO", "persist", {"log_id": lid})
+        if mem is not None:
+            try:
+                mem.add(lid, str(row.get("message", "")),
+                        {"module": inc.predicted_module, "verdict": verdict,
+                         "crew": crew_id, "priority": priority,
+                         "fingerprint": fingerprint})
+                mem_status = mem.report()
+                registry.log_activity(state_dir, "ECHO", "persist", {"log_id": lid})
+            except Exception as exc:
+                detail = "persist %s: %s" % (type(exc).__name__, exc)
+                memory_errors.append(detail)
+                inc.trace.append("NOVA->ECHO degraded: " + detail)
+        else:
+            inc.trace.append("NOVA->ECHO unavailable: incident actions continued")
         registry.log_activity(state_dir, "NOVA", "close",
                               {"status": inc.status,
                                "sched": inc.schedule.state, "mail": inc.notification.status})
@@ -171,8 +212,19 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
     # post-incident report (F)
     n_fault = sum(1 for r in results if r.get("verdict") == 1)
     rep = os.path.join(state_dir, "reports", "run_report.md")
+    recurrence_path = os.path.join(state_dir, "reports", "recurrence.md")
+    recurrence = analyze_recurrence(results)
+    render_report(recurrence, recurrence_path)
     with open(rep, "w") as f:
-        f.write("# Run report\n\nlogs=%d genuine=%d backend=%s\n\n" % (len(results), n_fault, mem_name))
+        f.write("# Run report\n\nlogs=%d genuine=%d backend=%s memory_records=%d\n\n" %
+                (len(results), n_fault, mem_status.get("backend", mem_name),
+                 mem_status.get("record_count", 0)))
+        if memory_errors:
+            f.write("Memory degraded; actions continued without some history operations:\n\n")
+            for error in memory_errors:
+                f.write("- %s\n" % error)
+            f.write("\n")
+        f.write("Recurrence report: `recurrence.md` (counts are for this run).\n\n")
         for r in results:
             if r.get("verdict") == 1:
                 f.write("- %s p=%s pri=%s spec=%s sched=%s mail=%s\n" % (

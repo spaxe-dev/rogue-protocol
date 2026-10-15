@@ -14,8 +14,14 @@ class TfidfMemory:
     def __init__(self, path):
         self.path = path
         self.docs = []
-        if os.path.exists(os.path.join(path, "docs.json")):
-            self.docs = json.load(open(os.path.join(path, "docs.json")))
+        docs_path = os.path.join(path, "docs.json")
+        if os.path.exists(docs_path):
+            try:
+                with open(docs_path, encoding="utf-8") as f:
+                    self.docs = json.load(f)
+                _validate_docs(self.docs)
+            except (OSError, ValueError, TypeError) as exc:
+                raise ValueError("invalid historian state at %s: %s" % (docs_path, exc)) from exc
         from sklearn.feature_extraction.text import TfidfVectorizer
         self.vec = TfidfVectorizer(max_features=5000, ngram_range=(1, 2),
                                    sublinear_tf=True, min_df=1)
@@ -30,11 +36,27 @@ class TfidfMemory:
         self.persist()
         return log_id
 
+    def find_exact(self, fingerprint, module=None):
+        """Find an exact source-row fingerprint; vector similarity is not used."""
+        if not fingerprint:
+            return None
+        for doc in self.docs:
+            if doc.get("fingerprint") != fingerprint:
+                continue
+            if module is None or doc.get("module") == module:
+                return doc["log_id"]
+        return None
+
     def query(self, text, k=3, module=None):
-        if not self.docs:
+        if not self.docs or k <= 0 or not str(text).strip():
             return []
-        X = self.vec.fit_transform(self._texts())
-        q = self.vec.transform([(module + " " if module else "") + text])
+        try:
+            X = self.vec.fit_transform(self._texts())
+            q = self.vec.transform([(module + " " if module else "") + text])
+        except ValueError as exc:
+            if "empty vocabulary" in str(exc):
+                return []
+            raise
         scores = (X @ q.T).toarray().ravel()
         order = np.argsort(-scores)[:k]
         out = []
@@ -43,15 +65,27 @@ class TfidfMemory:
             if module and d.get("module") != module:
                 continue
             out.append({"log_id": d["log_id"], "score": round(float(scores[int(i)]), 4),
-                        "module": d.get("module", ""), "text": d.get("text", "")[:160]})
+                        "module": d.get("module", ""), "text": d.get("text", "")[:160],
+                        "metadata": {k: v for k, v in d.items()
+                                     if k not in ("log_id", "text")}})
         return out
 
     def persisted(self):
         return os.path.exists(os.path.join(self.path, "docs.json"))
 
+    def report(self):
+        return {"backend": "tfidf", "record_count": len(self.docs),
+                "persisted": self.persisted(), "search": "tf-idf lexical similarity"}
+
     def persist(self):
         os.makedirs(self.path, exist_ok=True)
-        json.dump(self.docs, open(os.path.join(self.path, "docs.json"), "w"))
+        target = os.path.join(self.path, "docs.json")
+        temporary = target + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as f:
+            json.dump(self.docs, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, target)
 
 
 class FaissMemory:
@@ -64,11 +98,35 @@ class FaissMemory:
         self.path = path
         self.docs = []
         self.faiss = faiss
-        if os.path.exists(os.path.join(path, "docs.json")):
-            self.docs = json.load(open(os.path.join(path, "docs.json")))
+        docs_path = os.path.join(path, "docs.json")
+        if os.path.exists(docs_path):
+            try:
+                with open(docs_path, encoding="utf-8") as f:
+                    self.docs = json.load(f)
+                _validate_docs(self.docs)
+            except (OSError, ValueError, TypeError) as exc:
+                raise ValueError("invalid historian state at %s: %s" % (docs_path, exc)) from exc
         self.index = faiss.IndexFlatIP(self.DIM)
-        if os.path.exists(os.path.join(path, "index.faiss")) and self.docs:
-            self.index = faiss.read_index(os.path.join(path, "index.faiss"))
+        index_path = os.path.join(path, "index.faiss")
+        if os.path.exists(index_path) and self.docs:
+            try:
+                candidate = faiss.read_index(index_path)
+                if candidate.ntotal == len(self.docs) and candidate.d == self.DIM:
+                    self.index = candidate
+                else:
+                    self._rebuild()
+            except Exception:
+                # docs.json is the source of truth; rebuild the derived index.
+                self._rebuild()
+        elif self.docs:
+            self._rebuild()
+
+    def _rebuild(self):
+        self.index = self.faiss.IndexFlatIP(self.DIM)
+        if self.docs:
+            vectors = [self._embed(d.get("module", "") + " " + d.get("text", ""))
+                       for d in self.docs]
+            self.index.add(np.asarray(vectors, dtype=np.float32))
 
     @staticmethod
     def _embed(text):
@@ -88,8 +146,19 @@ class FaissMemory:
         self.persist()
         return log_id
 
+    def find_exact(self, fingerprint, module=None):
+        """Find an exact source-row fingerprint; vector similarity is not used."""
+        if not fingerprint:
+            return None
+        for doc in self.docs:
+            if doc.get("fingerprint") != fingerprint:
+                continue
+            if module is None or doc.get("module") == module:
+                return doc["log_id"]
+        return None
+
     def query(self, text, k=3, module=None):
-        if not self.docs:
+        if not self.docs or k <= 0 or not str(text).strip():
             return []
         s, ids = self.index.search(
             np.array([self._embed(((module + " ") if module else "") + text)]),
@@ -102,7 +171,9 @@ class FaissMemory:
             if module and d.get("module") != module:
                 continue
             out.append({"log_id": d["log_id"], "score": round(float(score), 4),
-                        "module": d.get("module", ""), "text": d.get("text", "")[:160]})
+                        "module": d.get("module", ""), "text": d.get("text", "")[:160],
+                        "metadata": {k: v for k, v in d.items()
+                                     if k not in ("log_id", "text")}})
             if len(out) >= k:
                 break
         return out
@@ -110,10 +181,21 @@ class FaissMemory:
     def persisted(self):
         return os.path.exists(os.path.join(self.path, "docs.json"))
 
+    def report(self):
+        return {"backend": "faiss", "record_count": len(self.docs),
+                "persisted": self.persisted(), "search": "hashed character-trigram similarity"}
+
     def persist(self):
         os.makedirs(self.path, exist_ok=True)
-        json.dump(self.docs, open(os.path.join(self.path, "docs.json"), "w"))
-        self.faiss.write_index(self.index, os.path.join(self.path, "index.faiss"))
+        docs_tmp = os.path.join(self.path, "docs.json.tmp")
+        with open(docs_tmp, "w", encoding="utf-8") as f:
+            json.dump(self.docs, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(docs_tmp, os.path.join(self.path, "docs.json"))
+        index_tmp = os.path.join(self.path, "index.faiss.tmp")
+        self.faiss.write_index(self.index, index_tmp)
+        os.replace(index_tmp, os.path.join(self.path, "index.faiss"))
 
 
 def open_memory(path, backend="auto"):
@@ -126,3 +208,17 @@ def open_memory(path, backend="auto"):
             if backend == "faiss":
                 raise
     return TfidfMemory(path), "tfidf"
+
+
+def _validate_docs(docs):
+    if not isinstance(docs, list):
+        raise ValueError("expected a JSON list")
+    seen = set()
+    for i, doc in enumerate(docs):
+        if not isinstance(doc, dict) or not doc.get("log_id"):
+            raise ValueError("record %d has no stable log_id" % i)
+        if "text" not in doc or not isinstance(doc["text"], str):
+            raise ValueError("record %s has no text" % doc["log_id"])
+        if doc["log_id"] in seen:
+            raise ValueError("duplicate log_id %s" % doc["log_id"])
+        seen.add(doc["log_id"])
