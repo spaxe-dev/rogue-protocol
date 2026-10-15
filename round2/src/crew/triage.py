@@ -56,10 +56,18 @@ def _router():
     return _ROUTER
 
 
+PRIORITY_LEVELS = ("critical", "high", "medium", "low")
+PRIORITY_SCORE = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
 QUESTIONS = {
-    "urgency": {"type": "score",
-                "instructions": "How urgent is this spacecraft log?",
-                "criteria": ["routine", "watch", "urgent"]},
+    # PRIORITY CLASSIFICATION of an already-confirmed fault (never fault detection).
+    "priority": {"type": "choice",
+                 "instructions": "What is the repair priority of this confirmed spacecraft fault?",
+                 "criteria": {
+                     "critical": "safety-critical failure needing immediate action",
+                     "high": "serious fault needing prompt repair",
+                     "medium": "degraded function, schedule normally",
+                     "low": "minor anomaly, monitor"}},
     "escalate": {"type": "noul",
                  "instructions": "Does this need human escalation?"},
     "contradiction": {"type": "noul",
@@ -67,16 +75,25 @@ QUESTIONS = {
 }
 
 
+def build_priority_state(row: dict, proba: float) -> str:
+    """Telemetry + fault context for the priority step (genuine faults only)."""
+    return ("CONFIRMED FAULT (classifier p=%.2f). module=%s status=%s reading=%s "
+            "delay_ms=%s retry_count=%s mode=%s message=%s" % (
+                proba, row.get("module"), row.get("status"), row.get("reading"),
+                row.get("delay_ms"), row.get("retry_count"), row.get("mode"),
+                row.get("message", "")))
+
+
 def laya_assess(message: str) -> dict | None:
-    """Return validated Laya signals or None (fallback). Singleton Router pinned
-    to english on CPU; noul fields are P(true) floats, thresholded at >= 0.5."""
+    """Priority classification via Laya `choice`. Returns None on any failure
+    or invalid/ambiguous output — caller falls back explicitly, never invents."""
     try:
         res = _router().predict(message, QUESTIONS, model="english")
         ans = res.get("answers", {})
-        lvl = ans.get("urgency", {}).get("score", 0)
-        if not isinstance(lvl, (int, float)):
+        choice = ans.get("priority", {}).get("choice", "")
+        if choice not in PRIORITY_LEVELS:
             return None
-        return {"urgency_level": max(0, min(2, int(lvl))),
+        return {"priority": choice,
                 "escalate": float(ans.get("escalate", {}).get("noul", 0.0)) >= 0.5,
                 "contradiction": float(ans.get("contradiction", {}).get("noul", 0.0)) >= 0.5}
     except Exception:
@@ -84,17 +101,29 @@ def laya_assess(message: str) -> dict | None:
 
 
 def assess(row: dict, proba: float, use_laya: bool = True) -> dict:
+    """Round 1 owns the verdict. Laya classifies PRIORITY of genuine faults;
+    invalid Laya output falls back explicitly to the deterministic policy."""
     base = deterministic_policy(row, proba)
     if not use_laya:
         return base
-    sig = laya_assess(str(row.get("message", "")))
-    if sig is None:
-        base["rationale"].append("laya unavailable/invalid -> fallback kept")
+    try:
+        sig = laya_assess(build_priority_state(row, proba))
+    except Exception:
+        sig = None
+    if sig is None or sig.get("priority") not in PRIORITY_LEVELS:
+        base["rationale"].append("laya priority invalid/unavailable -> deterministic fallback")
         return base
-    score = max(0, min(5, base["score"] + sig["urgency_level"] - 1))
-    urgency = "critical" if score >= 4 else "high" if score == 3 else "medium" if score == 2 else "low"
-    return {"urgency": urgency, "score": score,
+    score = PRIORITY_SCORE[sig["priority"]]
+    if abs(score - base["score"]) > 1:
+        base["rationale"].append(
+            "laya=%s vs deterministic=%s disagree >1 level -> escalate" % (
+                sig["priority"], base["urgency"]))
+        return {"urgency": sig["priority"], "score": score, "escalate": True,
+                "contradiction": sig["contradiction"],
+                "rationale": base["rationale"] + ["priority source: laya choice"],
+                "source": "laya+rules"}
+    return {"urgency": sig["priority"], "score": score,
             "escalate": sig["escalate"] or score >= 4,
             "contradiction": sig["contradiction"] or base["contradiction"],
-            "rationale": base["rationale"] + ["laya urgency+%d" % (sig["urgency_level"] - 1)],
+            "rationale": base["rationale"] + ["priority source: laya choice"],
             "source": "laya+rules"}
