@@ -22,6 +22,10 @@ NUMERIC = (
     + ["neg0", "neg1", "neg2", "neg3", "neg4"]
 )
 CATEGORICAL = ["module", "mode", "node", "status"]
+STATUS_DELAY_INTERACTIONS = [
+    "delay_status_ok", "delay_status_warn",
+    "delay_status_error", "delay_status_crit",
+]
 CALM_PHRASES = re.compile(r"all is well|nothing to see|crew need not worry", re.IGNORECASE)
 PHRASE_FLAGS = {
     "pos0": "seal breach",
@@ -74,15 +78,22 @@ def _as_frame(rows):
         if column not in df:
             df[column] = "__missing__"
         df[column] = df[column].fillna("__missing__").astype(str)
+    # Keep delay only for the matching status; this exposes status-specific
+    # delay effects while leaving the original delay_ms feature intact.
+    for status in ("OK", "WARN", "ERROR", "CRIT"):
+        column = f"delay_status_{status.lower()}"
+        df[column] = df["delay_ms"].where(df["status"] == status, 0.0)
     return df
 
 
-def make_preprocessor(dense=False):
+def make_preprocessor(dense=False, include_status_delay=False):
     """Build a train-fit-only preprocessing pipeline.
 
     Args:
         dense: If true, reduce word TF-IDF to 64 SVD components for HGB.
             Otherwise retain sparse word TF-IDF for LogReg/LGBM.
+        include_status_delay: Add per-status delay interaction columns for an
+            isolated experiment. False preserves the promoted baseline.
     """
     vectorizer = TfidfVectorizer(max_features=8000, ngram_range=(1, 2),
                                  min_df=2, sublinear_tf=True)
@@ -93,10 +104,13 @@ def make_preprocessor(dense=False):
         ])
         if dense else vectorizer
     )
+    numeric_columns = NUMERIC + (
+        STATUS_DELAY_INTERACTIONS if include_status_delay else []
+    )
 
     columns = ColumnTransformer(
         transformers=[
-            ("num", make_pipeline(SimpleImputer(strategy="median"), StandardScaler()), NUMERIC),
+            ("num", make_pipeline(SimpleImputer(strategy="median"), StandardScaler()), numeric_columns),
             ("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL),
             ("text", text_features, "message"),
         ],
