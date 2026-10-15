@@ -16,6 +16,12 @@
   so live Laya would need a 421MB+ download: deferred per 10-min rule, fallback verified).
 - Laya (web-fetch of README): Apache-2.0, `pip install laya`, Router with choice/score/noul
   questions; routing-only works offline, `--predict` downloads checkpoint first use.
+- LIVE LAYA VERIFIED 2026-10-15 (Aadit, this machine): first `predict` on a genuine-fault
+  state took 21.4s (5 small files fetched; weights resolved fast), routed `english` as pinned.
+  Priority choice returned `low` (p=0.53) on a CRIT O2 fault while deterministic says critical —
+  disagreement >1 level correctly triggered escalate=True. escalate noul 0.14→False,
+  contradiction noul 0.72→True. Checkpoint emits a temperature RuntimeWarning (treat its
+  confidence as uncalibrated). Full suite incl. live-Laya test: 20/20 green in ~23s.
 - Laya (web-fetch of README): Apache-2.0, `pip install laya`, Router with choice/score/noul
   questions; needs torch + ~421M-param checkpoint download from HF Hub on first use (~2.3GB all).
   Routing-only call works offline; `--predict` needs the download. Heavy for remaining time.
