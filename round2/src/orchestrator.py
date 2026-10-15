@@ -15,7 +15,7 @@ from schemas import Incident, RiskAssessment, RepairProposal, NotificationStatus
 import classifier  # noqa: E402
 from crew import triage, engineer, logistics, communications, registry, safety  # noqa: E402
 from memory.historian import open_memory  # noqa: E402
-from tools import deception_detector  # noqa: E402
+from tools import deception_detector, handover, timeline  # noqa: E402
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -179,4 +179,10 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
                     r["log_id"], r.get("proba"), r["risk"]["urgency"], r.get("routed_to"),
                     r["schedule"].get("state"), r["notification"].get("status")))
     print("logs=%d genuine=%d report=%s" % (len(results), n_fault, rep))
+    # judge-visible reports (Swayam): pure readers; must never break the workflow.
+    for name, gen in (("handover", handover.generate), ("timeline", timeline.generate)):
+        try:
+            print("%s: %s" % (name, gen(state_dir)))
+        except Exception as e:
+            print("%s: FAILED (%s: %s)" % (name, type(e).__name__, e))
     return results
