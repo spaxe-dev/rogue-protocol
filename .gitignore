@@ -19,3 +19,4 @@ round2/**/dispatch_log.csv
 round2/**/schedule.csv
 # scratch / experiment files (never commit)
 exp_*
+round2/demo_full/
