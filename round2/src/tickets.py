@@ -176,15 +176,17 @@ class JiraProvider(TicketProvider):
                           % (key, self.project_key, priority)}
 
     def search_by_label(self, label):
-        """Find issues carrying our incident label. Used to reconcile timeouts."""
+        """Find issues carrying our incident label. POST /search/jql (GET /search
+        returns 410 on current Jira Cloud). Used to reconcile timeouts."""
         import urllib.parse
-        jql = "labels = %s" % label
-        url = "%s/rest/api/3/search?%s" % (
-            self.base_url, urllib.parse.urlencode(
-                {"jql": jql, "fields": "key,summary", "maxResults": 5}))
+        payload = json.dumps({"jql": "labels = %s" % label,
+                              "fields": ["key", "summary"],
+                              "maxResults": 5}).encode("utf-8")
         req = urllib.request.Request(
-            url, method="GET",
-            headers={"Accept": "application/json",
+            self.base_url + "/rest/api/3/search/jql", data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json",
                      "Authorization": self._auth})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
