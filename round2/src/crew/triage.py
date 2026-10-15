@@ -45,26 +45,40 @@ def deterministic_policy(row: dict, proba: float) -> dict:
             "rationale": rationale, "source": "fallback"}
 
 
-def laya_assess(message: str) -> dict | None:
-    """Return validated Laya signals or None (fallback). Lazy import; no download
-    forced here — Router() downloads a checkpoint on first predict; wrap everything."""
-    try:
+_ROUTER = None
+
+
+def _router():
+    global _ROUTER
+    if _ROUTER is None:
         from laya import Router
-        router = Router()
-        res = router.predict(message, {
-            "urgency": {"type": "score", "instructions": "How urgent is this spacecraft log?",
-                        "criteria": ["routine", "watch", "urgent"]},
-            "escalate": {"type": "noul", "instructions": "Does this need human escalation?"},
-            "contradiction": {"type": "noul", "instructions": "Does calm wording hide a real problem?"},
-        })
+        _ROUTER = Router(default="english", device="cpu")  # logs English; venue CPU-only
+    return _ROUTER
+
+
+QUESTIONS = {
+    "urgency": {"type": "score",
+                "instructions": "How urgent is this spacecraft log?",
+                "criteria": ["routine", "watch", "urgent"]},
+    "escalate": {"type": "noul",
+                 "instructions": "Does this need human escalation?"},
+    "contradiction": {"type": "noul",
+                      "instructions": "Does calm wording hide a real problem?"},
+}
+
+
+def laya_assess(message: str) -> dict | None:
+    """Return validated Laya signals or None (fallback). Singleton Router pinned
+    to english on CPU; noul fields are P(true) floats, thresholded at >= 0.5."""
+    try:
+        res = _router().predict(message, QUESTIONS, model="english")
         ans = res.get("answers", {})
-        urg = ans.get("urgency", {})
-        lvl = urg.get("score", 0)
+        lvl = ans.get("urgency", {}).get("score", 0)
         if not isinstance(lvl, (int, float)):
             return None
         return {"urgency_level": max(0, min(2, int(lvl))),
-                "escalate": bool(ans.get("escalate", {}).get("noul", False)),
-                "contradiction": bool(ans.get("contradiction", {}).get("noul", False))}
+                "escalate": float(ans.get("escalate", {}).get("noul", 0.0)) >= 0.5,
+                "contradiction": float(ans.get("contradiction", {}).get("noul", 0.0)) >= 0.5}
     except Exception:
         return None
 
