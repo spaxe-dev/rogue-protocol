@@ -71,6 +71,8 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
         inc.risk = RiskAssessment(**risk)
         inc.trace.append("NOVA->LYRA assessed %s" % risk["urgency"])
         inc.deception_flags = deception_detector.detect(row, proba, seen_hashes)
+        dscore, drules = deception_detector.score(row, proba)
+        inc.trace.append("deception risk=%d/3 [%s]" % (dscore, ",".join(drules) or "none"))
         # NOVA -> ECHO: history (D) before routing so neighbors inform specialist choice
         neighbors = mem.query(str(row.get("message", "")), k=3,
                               module=inc.predicted_module)
@@ -115,12 +117,31 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
             inc.trace.append("NOVA->PULSE suppressed: %s" % inc.status)
             registry.log_activity(state_dir, "PULSE", "suppress", {"status": inc.status})
         else:
-            inc.notification = NotificationStatus(**communications.send(
-                state_dir, lid, crew_id, crew_name, inc.predicted_module,
-                proba, priority, findings, neighbors))
-            inc.trace.append("NOVA->PULSE dispatched %s" % inc.notification.status)
-            registry.log_activity(state_dir, "PULSE", "send",
-                                  {"path": inc.notification.path})
+            payload = None
+            try:
+                payload = communications.send(
+                    state_dir, lid, crew_id, crew_name, inc.predicted_module,
+                    proba, priority, findings, neighbors,
+                    deception={"score": dscore, "rules": drules})
+            except Exception as e:  # comms failure must not stall the workflow (E)
+                inc.trace.append("NOVA->PULSE dispatch FAILED (%s: %s)"
+                                 % (type(e).__name__, e))
+                registry.log_activity(state_dir, "PULSE", "send-failed",
+                                      {"error": "%s: %s" % (type(e).__name__, e)},
+                                      ok=False)
+            if payload is None:
+                inc.notification = NotificationStatus(
+                    channel="local-outbox", status="failed", path="")
+            else:
+                inc.notification = NotificationStatus(
+                    channel=payload.get("channel", "local-outbox"),
+                    status=payload.get("status", "queued"),
+                    path=payload.get("path", ""))
+                if payload.get("reason"):
+                    inc.trace.append("NOVA->PULSE note: %s" % payload["reason"])
+                inc.trace.append("NOVA->PULSE dispatched %s" % inc.notification.status)
+                registry.log_activity(state_dir, "PULSE", "send",
+                                      {"path": inc.notification.path})
         # NOVA -> AEGIS -> ORBIT: gate then book
         if dup:
             inc.schedule = ScheduleStatus(state="skipped", row="",
@@ -171,13 +192,22 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
     # post-incident report (F)
     n_fault = sum(1 for r in results if r.get("verdict") == 1)
     rep = os.path.join(state_dir, "reports", "run_report.md")
+    decep_rows = []
     with open(rep, "w") as f:
         f.write("# Run report\n\nlogs=%d genuine=%d backend=%s\n\n" % (len(results), n_fault, mem_name))
         for r in results:
             if r.get("verdict") == 1:
-                f.write("- %s p=%s pri=%s spec=%s sched=%s mail=%s\n" % (
+                ds, dr = deception_detector.score(r.get("raw") or {}, r.get("proba") or 0.0)
+                decep_rows.append((ds, r.get("log_id"), dr))
+                f.write("- %s p=%s pri=%s spec=%s sched=%s mail=%s decep=%d/3\n" % (
                     r["log_id"], r.get("proba"), r["risk"]["urgency"], r.get("routed_to"),
-                    r["schedule"].get("state"), r["notification"].get("status")))
+                    r["schedule"].get("state"), r["notification"].get("status"), ds))
+        f.write("\n## Top deception risk (evidence, not proof of intent)\n\n")
+        if not decep_rows:
+            f.write("- none\n")
+        else:
+            for ds, lid, dr in sorted(decep_rows, reverse=True):
+                f.write("- %s: %d/3 [%s]\n" % (lid, ds, ",".join(dr) or "none"))
     print("logs=%d genuine=%d report=%s" % (len(results), n_fault, rep))
     # judge-visible reports (Swayam): pure readers; must never break the workflow.
     for name, gen in (("handover", handover.generate), ("timeline", timeline.generate)):

@@ -112,3 +112,32 @@ def test_malformed_trace_is_skipped_not_fatal(tmp_path):
     assert "1 malformed" in h          # skipped, not fatal
     assert "malformed trace lines skipped: 1" in t
     assert "X1" in t                    # the good record is still rendered
+
+
+def test_deception_score_named_rules():
+    from tools import deception_detector as dd
+    s, rules = dd.score({"status": "CRIT",
+                         "message": "all is well, crew need not worry"}, 0.9)
+    assert s == 1 and rules == ["calm_with_alarming_signal"]
+    s, rules = dd.score({"status": "OK", "message": "nothing to see REDACTED"}, 0.8)
+    assert s == 3 and rules == ["calm_with_alarming_signal",
+                                "reassurance_plus_redacted",
+                                "ok_status_high_proba"]
+    s, rules = dd.score({"status": "OK", "message": "routine telemetry"}, 0.1)
+    assert (s, rules) == (0, [])
+    assert dd.explain(["ok_status_high_proba"]) == ["OK status but high fault probability"]
+
+
+def test_comms_failure_recorded_not_fatal(tmp_path, monkeypatch):
+    import orchestrator as orch_mod
+    from crew import communications
+
+    def boom(*a, **k):
+        raise OSError("disk gone")
+    monkeypatch.setattr(communications, "send", boom)
+    inp = str(tmp_path / "in.csv")
+    write_csv(inp, [row("R1")])
+    st = str(tmp_path / "st")
+    res = orch_mod.run(inp, st, KIT, use_laya=False)
+    genuine = [r for r in res if r.get("verdict") == 1]
+    assert genuine and all(r["notification"]["status"] == "failed" for r in genuine)

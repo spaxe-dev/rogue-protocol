@@ -14,6 +14,11 @@ import json
 import os
 from datetime import datetime, timezone
 
+try:
+    from tools import deception_detector
+except ImportError:  # run directly as a script
+    import deception_detector
+
 NOTIFY_TRUTH = {
     "queued": "generated locally (outbox .eml) — NOT delivered",
     "sent": "sent/confirmed by adapter",
@@ -309,6 +314,22 @@ def generate(state_dir, out_path=None):
     if edges:
         L.append("")
         L.append("Duplicate links: " + ", ".join("`%s`->`%s`" % e for e in edges))
+    L.append("")
+
+    # 9. deception risk (explainable named rules; evidence, not intent)
+    L.append("## 9. Deception risk indicators (evidence, not proof of intent)")
+    L.append("")
+    drows = []
+    for i in inc_list:
+        if i.get("verdict") == 1:
+            s, rules = deception_detector.score(i.get("raw") or {}, i.get("proba") or 0.0)
+            drows.append((s, i.get("log_id"), rules))
+    if not drows:
+        L.append("- unavailable / none recorded.")
+    else:
+        for s, lid, rules in sorted(drows, reverse=True):
+            txt = "; ".join(deception_detector.explain(rules)) if rules else "none"
+            L.append("- `%s`: %d/3 [%s] — %s" % (lid, s, ",".join(rules) or "none", txt))
     L.append("")
 
     with open(out_path, "w", encoding="utf-8") as f:

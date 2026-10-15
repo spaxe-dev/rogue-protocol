@@ -57,6 +57,9 @@ def events(inc):
         ("triage", "source=%s urgency=%s score=%s escalate=%s contradiction=%s" % (
             risk.get("source"), risk.get("urgency"), risk.get("score"),
             risk.get("escalate"), risk.get("contradiction")))]
+    ds, dr = handover.deception_detector.score(inc.get("raw") or {}, inc.get("proba") or 0.0)
+    ev.insert(3, ("deception risk", "%d/3 [%s] (evidence, not intent)"
+                  % (ds, ",".join(dr) or "none")))
     nbtxt = ", ".join("%s:%s" % (n.get("log_id"), n.get("score")) for n in nb)
     ev.append(("historian lookup", "%d neighbor(s)%s" % (len(nb), (" [" + nbtxt + "]") if nbtxt else "")))
     if inc.get("is_duplicate_of"):

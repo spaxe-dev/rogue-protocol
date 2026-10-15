@@ -53,7 +53,14 @@ def main(argv=None):
     if not a.input:
         ap.error("--input is required (or use --roster / --status)")
     kit = a.kit or os.path.normpath(os.path.join(ROOT, "..", "rogue-protocol"))
-    run(a.input, a.state, kit, memory_backend=a.memory, use_laya=not a.no_laya)
+    results = run(a.input, a.state, kit, memory_backend=a.memory, use_laya=not a.no_laya)
+    failed = [r.get("log_id") for r in results
+              if (r.get("schedule") or {}).get("state") == "failed"
+              or (r.get("notification") or {}).get("status") == "failed"]
+    if failed:
+        print("run: %d failure(s) (%s); see reports/HANDOVER.md section 7"
+              % (len(failed), ",".join(failed)))
+        return 1
     return 0
 
 

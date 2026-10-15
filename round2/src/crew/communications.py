@@ -1,14 +1,20 @@
 """Communications Officer: local file-outbox adapter + delivery ledger + brief.
 
-The outbox is a demonstrable local adapter, NOT proof of delivery.
-SMTP/webhook adapters plug in here when authorized and available.
+The outbox is a demonstrable local adapter, NOT proof of delivery. No live
+transport (SMTP/webhook/Jira) is configured, so this never reports "sent":
+status is `queued` (a local artifact was written), `suppressed` (idempotent),
+or `failed` (the caller records it). SMTP/webhook adapters plug in here when
+authorized and available.
 """
 import csv
 import os
 from datetime import datetime, timezone
 
+TRANSPORT = "local-file-outbox"
 
-def send(state_dir, log_id, crew_id, crew_name, module, proba, priority, findings, neighbors):
+
+def send(state_dir, log_id, crew_id, crew_name, module, proba, priority, findings,
+         neighbors, deception=None):
     outbox = os.path.join(state_dir, "outbox")
     os.makedirs(outbox, exist_ok=True)
     subject = "[Aurora %s] %s fault %s (p=%.2f)" % (priority.upper(), module, log_id, proba)
@@ -18,13 +24,18 @@ def send(state_dir, log_id, crew_id, crew_name, module, proba, priority, finding
              "NINE log %s classified GENUINE FAULT (p=%.2f), priority %s." % (log_id, proba, priority),
              "Module: %s" % module, "Findings:"]
     lines += ["- " + f for f in findings]
+    if deception and deception.get("score"):
+        lines.append("Deception risk indicators (score %d/%d): %s" % (
+            deception["score"], deception.get("total", 3),
+            "; ".join(deception.get("rules") or []) or "none"))
     if neighbors:
         lines.append("Similar past incidents:")
         lines += ["- %s (score %s)" % (n["log_id"], n["score"]) for n in neighbors]
+    lines += ["", "Transport: %s — generated locally, NOT proof of delivery." % TRANSPORT]
     body = "\n".join(lines)
     path = os.path.join(outbox, log_id + ".eml")
     if os.path.exists(path):
-        return {"channel": "local-outbox", "status": "suppressed", "path": path,
+        return {"channel": TRANSPORT, "status": "suppressed", "path": path,
                 "reason": "already dispatched (idempotent)"}
     with open(path, "w") as f:
         f.write("Subject: %s\n\n%s" % (subject, body))
@@ -39,4 +50,4 @@ def send(state_dir, log_id, crew_id, crew_name, module, proba, priority, finding
     os.makedirs(os.path.dirname(brief), exist_ok=True)
     with open(brief, "w") as f:
         f.write("# Incident brief %s\n\n%s\n" % (log_id, body))
-    return {"channel": "local-outbox", "status": "queued", "path": path}
+    return {"channel": TRANSPORT, "status": "queued", "path": path}
