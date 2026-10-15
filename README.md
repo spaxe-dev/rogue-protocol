@@ -1,4 +1,4 @@
-# ROGUE PROTOCOL — Round 2: Autonomous Spacecraft Crew
+# ROGUE PROTOCOL — Autonomous Spacecraft Crew
 
 ## Workflow (start → end)
 
