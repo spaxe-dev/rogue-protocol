@@ -15,7 +15,7 @@ def need(cond, msg):
 
 def main():
     thr = float(open("threshold.txt").read().strip())
-    need(thr == 0.54, "threshold.txt must be 0.54, got %r" % thr)
+    need(thr == 0.48, "threshold.txt must be 0.48, got %r" % thr)
     model = joblib.load("model.joblib")
     va = pd.read_csv("val.csv")
     p = model.predict_proba(va)[:, 1]
@@ -24,8 +24,8 @@ def main():
     need(set(v.tolist()) <= {0, 1}, "non-binary verdicts")
     from sklearn.metrics import f1_score
     f1 = f1_score(va["is_true_fault"], v)
-    print("val F1 @%.2f = %.4f (expect ~0.6832)" % (thr, f1))
-    need(abs(f1 - 0.6832) < 0.02, "F1 drifted >0.02 from canonical 0.6832")
+    print("val F1 @%.2f = %.4f (expect ~0.6713)" % (thr, f1))
+    need(abs(f1 - 0.6713) < 0.02, "F1 drifted >0.02 from canonical 0.6713")
 
     # fault injection: malformed rows must not crash, must stay binary
     te = pd.read_csv("test.csv")

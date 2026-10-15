@@ -3,7 +3,7 @@
 Writes: model.joblib, threshold.txt, metrics.md
 
 Preprocessing comes from Kunal's features_kunal.make_preprocessor
-(verified byte-identical flags + exact score reproduction 0.6832 @0.54).
+(latest recorded validation result: F1 0.6713 @0.48).
 Model + threshold logic below is Aadit's and stays untouched.
 """
 import time
@@ -55,7 +55,7 @@ def main():
     thr_floor, f1_floor = sweep_threshold(p_floor, yva)
 
     # Primary: HGB dense (promoted config: svd64 + phrase flags + leaves15;
-    # sweep winner 0.6832 @0.54, +0.031 over svd128 baseline; CV caveat in metrics.md)
+    # latest recorded sweep winner 0.6713 @0.48; CV caveat in metrics.md)
     primary = make_pipeline(
         build_dense_pre(),
         HistGradientBoostingClassifier(

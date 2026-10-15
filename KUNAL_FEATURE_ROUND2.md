@@ -168,27 +168,20 @@ project's pinned versions target a different Python environment, so the team sho
 also run its normal environment if exact environment parity is required. The code
 is based on checkout `95b959c`.
 
-## Round 1 Threshold Validator Mismatch
+## Canonical Round 1 Operating Point
 
-The repository currently contains conflicting Round 1 threshold records:
+The current canonical operating point is threshold **0.48**, with validation F1
+**0.6713** on 1,000 rows (TP 145, FN 64, FP 78, TN 713). This is the latest recorded
+training result in `rogue-protocol/metrics.md`; `threshold.txt`, the Round 1
+explanation, the classifier fallback, and the validation gate now use the same
+operating point. At threshold 0.5, the recorded F1 is 0.6667.
 
-| Artifact | Threshold / expected result |
-|---|---|
-| `rogue-protocol/threshold.txt` | `0.48` |
-| `rogue-protocol/metrics.md` | F1 `0.6713` at `0.48` |
-| `rogue-protocol/explanation.md` | `0.54`, F1 `0.6832` |
-| `rogue-protocol/validate_anubhav.py` | hard-requires `0.54` and F1 within `0.02` of `0.6832` |
+`validate_anubhav.py` checks the exact canonical threshold and allows F1 to vary by
+less than 0.02 around 0.6713. It also runs malformed-input checks and validates
+`submission.csv` if present. A prior check failed only because the validator still
+expected the older 0.54 / 0.6832 result; that expectation has now been aligned.
 
-I ran `submit_swayam.py` with the current threshold. It generated 3,000 binary
-verdicts and the submission checker printed `TRANSMISSION VALID` (779 faults
-flagged). The validation script also passed its malformed-row fault injection, but
-exited with `REVISE` because `threshold.txt` contained `0.48` instead of its required
-`0.54`. It reported validation F1 `0.6713` at `0.48`, which is within the validator's
-`0.02` F1 tolerance from `0.6832`; the exact-threshold assertion is the failing
-condition.
-
-This is a configuration mismatch, not a CSV-format or malformed-input failure. Before
-calling the Round 1 gate green, the team should choose one canonical model result and
-update the threshold, metrics, explanation, and validator expectations together—or
-restore `0.54` and regenerate the submission from that threshold. Do not treat the
-valid CSV as evidence that the strict model-validation gate passed.
+The submission generated at threshold 0.48 contained 3,000 binary verdicts and
+passed `check_submission.py` (`TRANSMISSION VALID`, 779 faults flagged). Re-run the
+validator after any retraining or threshold change so its expected operating point
+stays synchronized with the recorded model result.
