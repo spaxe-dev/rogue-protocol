@@ -6,3 +6,5 @@ submission.csv
 team*.csv
 outbox/
 trace.jsonl
+# scratch / experiment files (never commit)
+exp_*
