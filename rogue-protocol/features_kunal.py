@@ -15,11 +15,12 @@ from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
 
 
-NUMERIC = [
-    "reading", "delay_ms", "retry_count", "mlen", "reading_missing",
-    "has_red", "calm", "pos0", "pos1", "pos2",
-    "neg0", "neg1", "neg2", "neg3", "neg4",
-]
+NUMERIC = (
+    ["reading", "delay_ms", "retry_count"]
+    + ["has_red", "calm", "mlen", "reading_missing"]
+    + ["pos0", "pos1", "pos2"]
+    + ["neg0", "neg1", "neg2", "neg3", "neg4"]
+)
 CATEGORICAL = ["module", "mode", "node", "status"]
 CALM_PHRASES = re.compile(r"all is well|nothing to see|crew need not worry", re.IGNORECASE)
 PHRASE_FLAGS = {
@@ -80,16 +81,18 @@ def make_preprocessor(dense=False):
     """Build a train-fit-only preprocessing pipeline.
 
     Args:
-        dense: Retained for compatibility with the current training script.
-            The promoted spec uses the same dense SVD-64 representation for
-            every model path.
+        dense: If true, reduce word TF-IDF to 64 SVD components for HGB.
+            Otherwise retain sparse word TF-IDF for LogReg/LGBM.
     """
-    del dense
-    text_features = Pipeline([
-        ("tfidf", TfidfVectorizer(max_features=8000, ngram_range=(1, 2),
-                                  min_df=2, sublinear_tf=True)),
-        ("svd", TruncatedSVD(n_components=64, random_state=42)),
-    ])
+    vectorizer = TfidfVectorizer(max_features=8000, ngram_range=(1, 2),
+                                 min_df=2, sublinear_tf=True)
+    text_features = (
+        Pipeline([
+            ("tfidf", vectorizer),
+            ("svd", TruncatedSVD(n_components=64, random_state=42)),
+        ])
+        if dense else vectorizer
+    )
 
     columns = ColumnTransformer(
         transformers=[
@@ -97,8 +100,7 @@ def make_preprocessor(dense=False):
             ("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL),
             ("text", text_features, "message"),
         ],
-        # The SVD text block and numeric/categorical features form a dense matrix.
-        sparse_threshold=0.0,
+        sparse_threshold=0.0 if dense else 0.3,
     )
     return Pipeline([
         ("derive", FunctionTransformer(_as_frame, validate=False)),
