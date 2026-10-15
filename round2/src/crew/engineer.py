@@ -31,7 +31,7 @@ NOMINAL_HINTS = {"Lab-Power": (10.0, 14.0), "Life-Support": (18.0, 24.0)}
 
 
 def load_roster(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)["crew"]
 
 

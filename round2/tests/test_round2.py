@@ -14,7 +14,7 @@ from crew.triage import assess  # noqa: E402
 from memory.historian import open_memory  # noqa: E402
 
 KIT = os.path.join(os.path.dirname(__file__), "..", "..", "rogue-protocol")
-ROSTER = os.path.join(os.path.dirname(__file__), "..", "crew.json")
+ROSTER = os.path.join(os.path.dirname(__file__), "..", "config", "crew.json")
 
 COLS = ["log_id", "timestamp", "module", "mode", "node", "status",
         "reading", "delay_ms", "retry_count", "message"]

@@ -8,6 +8,10 @@ from filelock import FileLock
 HEADER = ["log_id", "crew_id", "start", "end", "job"]
 
 
+def _parse(ts):
+    return datetime.fromisoformat(ts)
+
+
 def read_schedule(path):
     if not os.path.exists(path):
         return []
@@ -16,10 +20,6 @@ def read_schedule(path):
         if r.fieldnames != HEADER:
             raise ValueError("schedule header must be %s, got %s" % (HEADER, r.fieldnames))
         return list(r)
-
-
-def _parse(ts):
-    return datetime.fromisoformat(ts)
 
 
 def audit(rows):
