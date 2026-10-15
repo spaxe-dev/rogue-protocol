@@ -4,7 +4,7 @@ import pandas as pd
 import sys
 
 MODEL = None
-THR = 0.48
+THR = 0.54
 
 
 def load(kit_dir):

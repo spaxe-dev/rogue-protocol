@@ -207,6 +207,18 @@ def run(input_csv, state_dir, kit_dir, memory_backend="auto", use_laya=True,
         seen[lid] = "processed"
         log_trace(state_dir, {"log_id": lid, "incident": inc.model_dump(),
                               "ts": datetime.now(timezone.utc).isoformat()})
+        # forensics archive + report (never breaks the pipeline)
+        try:
+            from forensics import record_incident, make_escalation_event
+            from tickets import ticket_escalation
+            record_incident(state_dir, inc.model_dump(), threshold=classifier.THR)
+            if any("disagree" in t for t in inc.trace):
+                esc = make_escalation_event(lid, "disagreement",
+                                            "laya-vs-deterministic priority disagreement")
+                ticket_escalation(state_dir, inc.model_dump(), esc)
+                inc.trace.append("ticket queued for disagreement escalation")
+        except Exception as exc:
+            inc.trace.append("forensics/ticket hook skipped: %s" % type(exc).__name__)
         results.append(inc.model_dump())
     json.dump(seen, open(seen_path, "w"))
     # post-incident report (F)
