@@ -9,6 +9,7 @@ outbox/
 trace.jsonl
 # round2 run outputs (generated; code + demo_logs.csv + crew.json are tracked)
 round2/demo_run/
+round2/demo_live/
 round2/**/memory_store/
 round2/**/state/
 round2/**/outbox/
