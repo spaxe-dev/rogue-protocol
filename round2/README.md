@@ -2,6 +2,11 @@
 
 ## Workflow (start → end)
 
+![Workflow diagram](docs/workflow.png)
+
+<details>
+<summary>Text version (for diff / screen readers)</summary>
+
 ```
 logs.csv (NINE ship logs)
   │
@@ -47,6 +52,8 @@ logs.csv (NINE ship logs)
 │                                 │  forensics_*.md + recurrence.md + run_report.md
 └─────────────────────────────────┘
 ```
+
+</details>
 
 Idempotency: re-runs skip seen `log_id`s; schedule/email/tickets all dedupe by ID.
 Fallbacks: Laya→deterministic, FAISS→TF-IDF, Jira→dry-run queue. Nothing fails silently.
